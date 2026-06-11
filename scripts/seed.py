@@ -236,7 +236,12 @@ async def seed(conn: asyncpg.Connection) -> None:
             txn_type = random.choice(["debit", "debit", "debit", "credit", "transfer", "fee", "refund"])
             amount = Decimal(random.uniform(1, 2000)).quantize(Decimal("0.01"))
             days_ago = random.randint(0, 365)
-            ref_id = hashlib.md5(f"{acct_id}{_}{days_ago}".encode()).hexdigest()[:16]
+            # len(txn_rows) is a globally-unique index, so the hash input is
+            # always distinct (the old "{acct_id}{_}{days_ago}" form collided
+            # because the unseparated integers were ambiguous, e.g. 1|23 == 12|3).
+            ref_id = hashlib.md5(
+                f"{acct_id}-{_}-{days_ago}-{len(txn_rows)}".encode()
+            ).hexdigest()[:16]
 
             txn_rows.append((
                 acct_id,

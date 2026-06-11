@@ -60,8 +60,8 @@ async def build_app():
     register_tools(mcp, pool)
     logger.info("MCP tools registered")
 
-    # Build the streamable-HTTP ASGI app
-    asgi_app = mcp.streamable_http_app()
+    # Build the streamable-HTTP ASGI app (FastMCP v3: http_app, transport "http")
+    asgi_app = mcp.http_app()
 
     # Wrap with OIDC middleware (outermost layer — runs first)
     protected_app = OIDCMiddleware(asgi_app)
