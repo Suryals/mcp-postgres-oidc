@@ -1,0 +1,129 @@
+{
+  "realm": "mcp-db",
+  "displayName": "MCP Database Realm",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "loginWithEmailAllowed": true,
+  "accessTokenLifespan": 3600,
+
+  "roles": {
+    "realm": [
+      {
+        "name": "db_admin",
+        "description": "Full database access — sees all columns unmasked, can query audit_logs"
+      },
+      {
+        "name": "db_analyst",
+        "description": "Analyst access — partial masking on PII, no salary/national_id"
+      },
+      {
+        "name": "db_readonly",
+        "description": "Read-only access — all sensitive columns fully masked"
+      }
+    ]
+  },
+
+  "clientScopes": [
+    {
+      "name": "db:sensitive",
+      "description": "Access to sensitive tables: employees",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true" }
+    },
+    {
+      "name": "db:admin",
+      "description": "Access to admin-only tables: audit_logs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true" }
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "mcp-server",
+      "name": "MCP Server (Service Account)",
+      "description": "Server-to-server client credentials for the MCP server itself",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "mcp-server-secret",
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["db:sensitive", "db:admin"]
+    },
+    {
+      "clientId": "mcp-cli",
+      "name": "MCP CLI Client (PKCE)",
+      "description": "Human-facing PKCE client for interactive token acquisition",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8888/auth/callback",
+        "http://mcp-postgres.traefik.test/auth/callback"
+      ],
+      "webOrigins": ["http://localhost:8888", "http://mcp-postgres.traefik.test"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["db:sensitive", "db:admin"]
+    },
+    {
+      "clientId": "mcp-test",
+      "name": "MCP Test Client (Password Grant)",
+      "description": "Password grant client for local testing only — disable in production",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "mcp-test-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": ["db:sensitive", "db:admin"]
+    }
+  ],
+
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@banking.demo",
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "alice123", "temporary": false }
+      ],
+      "realmRoles": ["db_admin"]
+    },
+    {
+      "username": "bob",
+      "email": "bob@banking.demo",
+      "firstName": "Bob",
+      "lastName": "Analyst",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "bob123", "temporary": false }
+      ],
+      "realmRoles": ["db_analyst"]
+    },
+    {
+      "username": "carol",
+      "email": "carol@banking.demo",
+      "firstName": "Carol",
+      "lastName": "Readonly",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "carol123", "temporary": false }
+      ],
+      "realmRoles": ["db_readonly"]
+    }
+  ]
+}

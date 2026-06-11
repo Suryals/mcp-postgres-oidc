@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.uv/
+
+# Env / secrets (none committed today, but never start)
+.env
+.env.*
+*.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs / runtime
+*.log

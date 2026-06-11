@@ -1,0 +1,56 @@
+services:
+
+  mcp-postgres:
+    image: postgres:16-alpine
+    container_name: mcp-postgres
+    environment:
+      POSTGRES_DB: banking_db
+      POSTGRES_USER: mcp_user
+      POSTGRES_PASSWORD: mcp_secret
+    volumes:
+      - mcp_postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcp_user -d banking_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mcp-net
+
+  mcp-server:
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    environment:
+      DATABASE_URL: postgresql://mcp_user:mcp_secret@mcp-postgres:5432/banking_db
+      # Internal URL to reach Keycloak directly (via auth-lab_auth-net)
+      KEYCLOAK_INTERNAL_URL: http://auth-keycloak:8080
+      # External issuer — matches the 'iss' claim in tokens issued by Keycloak
+      KEYCLOAK_ISSUER: http://keycloak.test/realms/mcp-db
+      KEYCLOAK_REALM: mcp-db
+      LOG_LEVEL: INFO
+    depends_on:
+      mcp-postgres:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp-postgres.rule=Host(`mcp-postgres.traefik.test`)"
+      - "traefik.http.routers.mcp-postgres.entrypoints=web"
+      - "traefik.http.services.mcp-postgres.loadbalancer.server.port=8000"
+    networks:
+      - mcp-net
+      - traefik-net
+      - auth-lab_auth-net   # reach auth-keycloak:8080 for JWKS validation
+
+volumes:
+  mcp_postgres_data:
+
+networks:
+  mcp-net:
+    driver: bridge
+  traefik-net:
+    external: true
+  auth-lab_auth-net:
+    external: true
