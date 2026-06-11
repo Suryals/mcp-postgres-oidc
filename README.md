@@ -14,45 +14,60 @@ A portfolio-grade MCP server exposing a PostgreSQL banking database with:
 
 ## Prerequisites
 
-- Docker + OrbStack running
-- `auth-lab` stack running (Keycloak at `keycloak.test`, PostgreSQL)
-- Traefik running with `traefik-net` external network
-- `curl`, `jq` installed
+- **Docker** (Docker Desktop or OrbStack)
+- Port **80** free (Traefik binds it — override with `TRAEFIK_WEB_PORT` if needed)
+- `curl`, `jq` (only for the command-line examples below)
+
+Everything else — Keycloak, the realm, the database, the seed data — is bundled
+and starts automatically. No other repos or services required.
 
 ---
 
 ## Quick Start
 
-### 1. Start the stack
+### 1. Map the demo hostnames to localhost (one time)
 
 ```bash
-cd /Users/surya/ai/projects/mcp-postgres-oidc
+echo "127.0.0.1 keycloak.test mcp-postgres.traefik.test" | sudo tee -a /etc/hosts
+```
+
+> On OrbStack, `*.test` already resolves to localhost — you can skip this.
+
+### 2. Bring up the whole stack
+
+```bash
+git clone https://github.com/Suryals/mcp-postgres-oidc.git
+cd mcp-postgres-oidc
 docker compose up -d --build
 ```
 
-### 2. Import the Keycloak realm
+That single command starts **everything**:
+
+| Service | Role |
+|---------|------|
+| `mcp-postgres` | PostgreSQL with the banking schema |
+| `seeder` | one-shot: loads ~2,000 customers / ~4,000 accounts / ~53,000 transactions, then exits |
+| `keycloak` | OIDC provider — **auto-imports** the `mcp-db` realm (3 roles, 3 users) |
+| `mcp-server` | the MCP server itself |
+| `traefik` (+ `dockerproxy`) | routes `keycloak.test` and `mcp-postgres.traefik.test` |
+
+Give Keycloak ~30s on first boot, then check it's live:
 
 ```bash
-./scripts/import_realm.sh
+curl -s http://mcp-postgres.traefik.test/health        # {"status":"ok",...}
+curl -s http://keycloak.test/realms/mcp-db | jq .realm  # "mcp-db"
 ```
 
-This creates the `mcp-db` realm with 3 roles and 3 test users — no changes to auth-lab.
+> **Port 80 in use?** Run `TRAEFIK_WEB_PORT=8080 docker compose up -d` and use
+> `http://mcp-postgres.traefik.test:8080` / `http://keycloak.test:8080` instead.
 
-### 3. Seed the database
+### 3. See it work
 
 ```bash
-# From the project root
-uv run --with faker --with asyncpg scripts/seed.py
+# Get a token and run the same query as each role — watch the PII masking change
+TOKEN=$(./scripts/get_token.sh alice)   # or bob / carol
+uv run --with httpx scripts/smoke_test.py
 ```
-
-Or against the Docker container:
-
-```bash
-DATABASE_URL=postgresql://mcp_user:mcp_secret@localhost:5432/banking_db \
-  uv run --with faker --with asyncpg scripts/seed.py
-```
-
-> Inserts ~2,000 customers, ~5,000 accounts, ~100,000 transactions, 200 employees.
 
 ---
 
@@ -122,20 +137,59 @@ TOKEN=$(curl -s -X POST \
 
 ---
 
-## Claude Desktop / Claude Code Config
+## Use it from Claude
+
+The server speaks streamable-HTTP MCP and expects `Authorization: Bearer <token>`.
+First mint a token (valid ~1h):
+
+```bash
+./scripts/get_token.sh alice    # alice=admin · bob=analyst · carol=readonly
+```
+
+### Claude Code
+
+```bash
+claude mcp add --transport http mcp-postgres-oidc \
+  http://mcp-postgres.traefik.test/mcp \
+  --header "Authorization: Bearer $(./scripts/get_token.sh alice)"
+
+claude mcp list      # → mcp-postgres-oidc ... ✔ Connected
+```
+
+Then ask Claude things like *"list the tables"* or *"search customers named
+Smith"* and watch the masking apply per role.
+
+### Claude Desktop
+
+Desktop bridges remote MCP servers through [`mcp-remote`](https://www.npmjs.com/package/mcp-remote).
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
+(see `claude_desktop_config.example.json` in this repo):
 
 ```json
 {
   "mcpServers": {
     "mcp-postgres-oidc": {
-      "url": "http://mcp-postgres.traefik.test/mcp",
-      "headers": {
-        "Authorization": "Bearer <your_token>"
-      }
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote",
+        "http://mcp-postgres.traefik.test/mcp",
+        "--header", "Authorization: Bearer ${MCP_TOKEN}"
+      ],
+      "env": { "MCP_TOKEN": "<paste a token from ./scripts/get_token.sh>" }
     }
   }
 }
 ```
+
+Restart Claude Desktop, then look for **mcp-postgres-oidc** in the tools (🔌) menu.
+
+> Requires Node.js (for `npx`) and the `/etc/hosts` entry from Quick Start so
+> Desktop can resolve `mcp-postgres.traefik.test`. Tokens expire — re-run
+> `get_token.sh` and update `MCP_TOKEN` when calls start returning 401.
+
+> **Browser login instead of a script:** open
+> `http://mcp-postgres.traefik.test/auth/login` for the PKCE flow, which returns
+> a token with a copy button (log in as alice / bob / carol).
 
 ---
 
@@ -171,24 +225,36 @@ TOKEN=$(curl -s -X POST \
 
 ## Architecture
 
+Everything below runs from a single `docker compose up`, on one bridge network
+(`mcp-net`):
+
 ```
-Traefik (traefik.test)
-  └── mcp-postgres.traefik.test → mcp-server:8000
-                                      │
-                              OIDCMiddleware
-                              (validates JWT vs Keycloak JWKS)
-                                      │
-                              FastMCP (streamable-http)
-                              ┌───────┴────────┐
-                         Guardrails        Masking Engine
-                              └───────┬────────┘
-                                 asyncpg pool
-                                      │
-                              mcp-postgres:5432
-                              (banking_db)
+        Client (Claude / curl)
+                │  Authorization: Bearer <JWT>
+                ▼
+   Traefik ──────────────┬─────────────────────────────┐
+   (:80)                 │                              │
+   keycloak.test ────────┘            mcp-postgres.traefik.test
+        │                                    │
+        ▼                                    ▼
+   Keycloak                            OIDCMiddleware
+   (mcp-db realm,                      (validates JWT vs Keycloak JWKS,
+    auto-imported)  ◄───JWKS (in-net)── extracts realm roles)
+                                             │
+                                       FastMCP (streamable-http)
+                                       ┌─────┴────────┐
+                                  Guardrails      Masking Engine
+                                       └─────┬────────┘
+                                        asyncpg pool
+                                             │
+                                       mcp-postgres:5432  (banking_db)
+                                             ▲
+                                        seeder (one-shot)
 ```
 
-Networks:
-- `mcp-net` — internal (mcp-server ↔ mcp-postgres)
-- `traefik-net` — external (Traefik routing)
-- `auth-lab_auth-net` — external (direct reach to auth-keycloak:8080 for JWKS)
+- The MCP server fetches JWKS **in-network** (`http://keycloak:8080`) but
+  validates the token issuer against the **public** URL
+  (`http://keycloak.test/realms/mcp-db`) — the classic split-horizon setup.
+- `dockerproxy` is a tiny nginx shim that lets Traefik talk to Docker daemons
+  requiring API ≥ 1.40 (e.g. OrbStack). Traefik is constrained to this compose
+  project so it never touches other containers on your host.

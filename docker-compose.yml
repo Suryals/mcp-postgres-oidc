@@ -1,5 +1,14 @@
+# Self-contained demo stack — `docker compose up` brings up EVERYTHING:
+# Postgres (banking data) + Keycloak (OIDC) + the MCP server + Traefik routing.
+# No external networks, no auth-lab, no manual realm import or seeding.
+#
+# One-time host setup (so the .test hostnames resolve to your machine):
+#   echo "127.0.0.1 keycloak.test mcp-postgres.traefik.test" | sudo tee -a /etc/hosts
+#
+# Requires port 80 to be free (Traefik binds it).
 services:
 
+  # ── Database ────────────────────────────────────────────────────────────────
   mcp-postgres:
     image: postgres:16-alpine
     container_name: mcp-postgres
@@ -12,12 +21,52 @@ services:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mcp_user -d banking_db"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     networks:
       - mcp-net
 
+  # ── One-shot seeder: fills banking_db with demo data, then exits ────────────
+  seeder:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    container_name: mcp-seeder
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://mcp_user:mcp_secret@mcp-postgres:5432/banking_db
+    volumes:
+      - ./scripts:/scripts:ro
+    command: uv run --quiet --with faker --with asyncpg /scripts/seed.py
+    depends_on:
+      mcp-postgres:
+        condition: service_healthy
+    networks:
+      - mcp-net
+
+  # ── Identity provider (OIDC) — auto-imports the mcp-db realm on startup ─────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: mcp-keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: 8080
+      KC_HOSTNAME: keycloak.test
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.keycloak.rule=Host(`keycloak.test`)"
+      - "traefik.http.routers.keycloak.entrypoints=web"
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+    networks:
+      - mcp-net
+
+  # ── The MCP server itself ───────────────────────────────────────────────────
   mcp-server:
     build:
       context: ./mcp_server
@@ -25,15 +74,16 @@ services:
     container_name: mcp-server
     environment:
       DATABASE_URL: postgresql://mcp_user:mcp_secret@mcp-postgres:5432/banking_db
-      # Internal URL to reach Keycloak directly (via auth-lab_auth-net)
-      KEYCLOAK_INTERNAL_URL: http://auth-keycloak:8080
-      # External issuer — matches the 'iss' claim in tokens issued by Keycloak
-      KEYCLOAK_ISSUER: http://keycloak.test/realms/mcp-db
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080          # JWKS fetch (in-cluster)
+      KEYCLOAK_PUBLIC_URL: http://keycloak.test            # token issuer + browser redirects
+      PUBLIC_BASE_URL: http://mcp-postgres.traefik.test    # OAuth callback
       KEYCLOAK_REALM: mcp-db
       LOG_LEVEL: INFO
     depends_on:
       mcp-postgres:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.mcp-postgres.rule=Host(`mcp-postgres.traefik.test`)"
@@ -41,8 +91,40 @@ services:
       - "traefik.http.services.mcp-postgres.loadbalancer.server.port=8000"
     networks:
       - mcp-net
-      - traefik-net
-      - auth-lab_auth-net   # reach auth-keycloak:8080 for JWKS validation
+
+  # ── Reverse proxy: routes keycloak.test + mcp-postgres.traefik.test ─────────
+  traefik:
+    image: traefik:v3.5
+    container_name: mcp-traefik
+    depends_on:
+      - dockerproxy
+    command:
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://dockerproxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=mcp-postgres-oidc_mcp-net
+      # Only manage THIS project's containers, so a shared Docker host (other
+      # Traefik stacks, other services) can't bleed into this demo's routing.
+      - --providers.docker.constraints=Label(`com.docker.compose.project`,`mcp-postgres-oidc`)
+      - --entrypoints.web.address=:80
+      - --log.level=INFO
+    ports:
+      # Override if 80 is taken:  TRAEFIK_WEB_PORT=8080 docker compose up
+      - "${TRAEFIK_WEB_PORT:-80}:80"
+    networks:
+      - mcp-net
+
+  # ── Docker-socket shim ──────────────────────────────────────────────────────
+  # Upgrades Traefik's legacy /v1.24/ Docker API calls so they work on daemons
+  # that require API >= 1.40 (e.g. OrbStack). See traefik/dockerproxy.conf.
+  dockerproxy:
+    image: nginx:alpine
+    container_name: mcp-dockerproxy
+    volumes:
+      - ./traefik/dockerproxy.conf:/etc/nginx/nginx.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - mcp-net
 
 volumes:
   mcp_postgres_data:
@@ -50,7 +132,3 @@ volumes:
 networks:
   mcp-net:
     driver: bridge
-  traefik-net:
-    external: true
-  auth-lab_auth-net:
-    external: true

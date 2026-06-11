@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def _auth_endpoint() -> str:
     """Browser-facing Keycloak URL (user's browser must reach this)."""
     return (
-        f"http://keycloak.test/realms/{settings.keycloak_realm}"
+        f"{settings.keycloak_public_url}/realms/{settings.keycloak_realm}"
         "/protocol/openid-connect/auth"
     )
 
@@ -41,7 +41,7 @@ def _token_endpoint() -> str:
 
 def _callback_uri(request: Request) -> str:
     """Absolute callback URL as seen by the browser / Keycloak."""
-    return f"http://mcp-postgres.traefik.test/auth/callback"
+    return f"{settings.public_base_url}/auth/callback"
 
 
 # ── /auth/login ───────────────────────────────────────────────────────────────

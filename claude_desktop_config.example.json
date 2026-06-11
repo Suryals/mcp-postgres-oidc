@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "mcp-postgres-oidc": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://mcp-postgres.traefik.test/mcp",
+        "--header",
+        "Authorization: Bearer ${MCP_TOKEN}"
+      ],
+      "env": {
+        "MCP_TOKEN": "PASTE_A_TOKEN_FROM_./scripts/get_token.sh_HERE"
+      }
+    }
+  }
+}
