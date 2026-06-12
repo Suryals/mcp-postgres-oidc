@@ -262,3 +262,20 @@ Everything below runs from a single `docker compose up`, on one bridge network
 - `dockerproxy` is a tiny nginx shim that lets Traefik talk to Docker daemons
   requiring API ≥ 1.40 (e.g. OrbStack). Traefik is constrained to this compose
   project so it never touches other containers on your host.
+
+---
+
+## Beyond app-layer masking — identity all the way to Postgres
+
+This server's authorization is **application-layer**: one pooled `mcp_user`
+connection, masking applied in code by role. The honest weakness is that the
+database authorizes nothing per-user — the masking engine is the whole boundary.
+
+[`experiments/pg18-oauth/`](experiments/pg18-oauth/) is a **proven spike** of the
+stronger architecture using **PostgreSQL 18's native OAuth**: a Keycloak bearer
+authenticates *as the user's role* (`OAUTHBEARER`), Keycloak makes the
+authorization decision (UMA), and **Postgres enforces column access natively** —
+`db_readonly` gets a hard `permission denied` on `ssn` from the engine, no
+`mcp_user`. Includes RFC 8693 token-exchange for the MCP→DB hop. See its
+[README](experiments/pg18-oauth/README.md) and
+[TARGET_FLOW](experiments/pg18-oauth/TARGET_FLOW.md).
