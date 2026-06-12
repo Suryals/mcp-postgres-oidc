@@ -1,0 +1,71 @@
+# Spike stack: PG18 native OAuth ← Keycloak (HTTPS) ← end-user identity.
+# Self-contained; isolated from the main demo. `docker compose up -d`.
+services:
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6
+    container_name: pg18-keycloak
+    command: >
+      start-dev --import-realm
+      --https-certificate-file=/certs/kc.crt
+      --https-certificate-key-file=/certs/kc.key
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # HTTPS issuer (PG18 requires it); HTTP kept on 8080 for the validator's
+      # in-cluster decision call (no cert trust needed there).
+      KC_HOSTNAME: https://keycloak.pg.test:8443
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./realm:/opt/keycloak/data/import:ro
+      - ./certs:/certs:ro
+    ports:
+      - "8443:8443"
+      - "8080:8080"
+    networks:
+      spike:
+        aliases: [keycloak.pg.test]
+
+  postgres:
+    build: .
+    image: pg18-kcvalidator
+    container_name: pg18-oauth-db
+    environment:
+      POSTGRES_PASSWORD: test
+    volumes:
+      - ./pg/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./pg/init:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - oauth_validator_libraries=kc_validator
+      # Validator hits Keycloak on the SAME host as the token issuer (cert + iss match).
+      - -c
+      - kc.token_endpoint=https://keycloak.pg.test:8443/realms/pgoauth/protocol/openid-connect/token
+      - -c
+      - kc.audience=postgres-resource
+      - -c
+      - kc.resource_name=appdb
+      - -c
+      - kc.client_id=postgres-resource
+      - -c
+      - kc.expected_issuer=https://keycloak.pg.test:8443/realms/pgoauth
+      - -c
+      - kc.http_timeout_ms=4000
+      - -c
+      - kc.debug=on
+    depends_on:
+      - keycloak
+    ports:
+      - "55432:5432"
+    networks:
+      spike:
+        aliases: [pg18-oauth-db]
+
+networks:
+  spike:
+    driver: bridge
