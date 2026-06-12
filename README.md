@@ -10,6 +10,11 @@ A portfolio-grade MCP server exposing a PostgreSQL banking database with:
 - **Full audit trail** (every query logged with user, roles, masked columns)
 - **Traefik integration** — exposed at `http://mcp-postgres.traefik.test`
 
+Claude Desktop calling the server live — it ran the OAuth login itself and the
+server reports the authenticated role (`db_admin`) and each table's masking policy:
+
+![Claude Desktop listing tables as db_admin](docs/screenshots/claude-desktop-list-tables.png)
+
 ---
 
 ## Prerequisites
