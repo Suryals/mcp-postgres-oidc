@@ -11,4 +11,5 @@ case "$USER" in
 esac
 curl -s -X POST http://keycloak.test/realms/mcp-db/protocol/openid-connect/token \
   -d 'grant_type=password&client_id=mcp-test&client_secret=mcp-test-secret' \
+  -d 'scope=openid mcp-roles' \
   -d "username=${USER}&password=${PASS}" | jq -r '.access_token'

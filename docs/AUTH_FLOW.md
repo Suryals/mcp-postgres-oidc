@@ -346,6 +346,8 @@ Same query, three identities:
 | Claude Desktop won't accept the URL | custom-connector UI requires **HTTPS** | connect via the `mcp-remote` stdio bridge (talks HTTP locally) |
 | `mcp-remote`: "Non-HTTPS URLs are only allowed for localhost" | it blocks plain HTTP by default | pass `--allow-http` (safe for a local `.test` host) |
 | DCR rejected: "URL doesn't match any trusted host" | `mcp-remote` registers `client_uri: github.com/modelcontextprotocol/mcp-cli` | add `github.com` to the realm's DCR trusted-hosts |
+| DCR token had no roles (every user readonly) | a DCR client gets no default scopes, so the role-bearing scope must be *requested* | advertise `scopes_supported: ["openid","mcp-roles"]` via the provider's `required_scopes`, so the client asks for `mcp-roles` at login |
+| `invalid_scope: openid email profile` at login | with empty `scopes_supported`, `mcp-remote` falls back to a hardcoded `openid email profile` the realm doesn't define | advertise the exact scopes the realm has (`openid mcp-roles`) — never leave it empty |
 
 ---
 

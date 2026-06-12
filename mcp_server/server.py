@@ -50,9 +50,17 @@ async def build_app():
     logger.info("Database pool ready")
 
     # Native MCP OAuth: DCR + browser PKCE + JWKS validation, all handled here.
+    #
+    # required_scopes advertises scopes_supported in the resource metadata, which
+    # the client (mcp-remote / Claude) requests at login. We MUST list `mcp-roles`
+    # here: a dynamically-registered client gets no default scopes, so unless the
+    # role-bearing scope is explicitly requested the token carries no
+    # realm_access.roles and every user collapses to the most-restrictive mask.
+    # Both scopes exist in the realm, so Keycloak won't reject them as invalid.
     auth = KeycloakAuthProvider(
         realm_url=f"{settings.keycloak_public_url}/realms/{settings.keycloak_realm}",
         base_url=settings.public_base_url,
+        required_scopes=["openid", "mcp-roles"],
     )
 
     mcp = FastMCP(
