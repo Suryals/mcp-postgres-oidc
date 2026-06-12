@@ -101,6 +101,10 @@ Steps 1–5 happen once; the cached token is reused silently afterward. Token
 validation and all of the OAuth metadata/DCR plumbing are handled by FastMCP's
 `KeycloakAuthProvider`.
 
+> 📖 **Full technical readout:** [`docs/AUTH_FLOW.md`](docs/AUTH_FLOW.md) — every
+> step (RFC 9728/8414/7591 + PKCE), the Keycloak realm settings that make DCR
+> carry roles, the split-horizon network alias, and the problems solved.
+
 ---
 
 ## Test Users
