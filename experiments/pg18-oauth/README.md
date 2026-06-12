@@ -86,6 +86,7 @@ which role* (connection auth); **Postgres** decides *which columns that role rea
 ### Reproduce
 
 ```bash
+./gen_certs.sh                         # throwaway CA + Keycloak TLS cert
 docker compose up -d --build          # HTTPS Keycloak + PG18 + validator
 ./setup_authz.sh                       # Keycloak Authorization Services
 uv run --with httpx pg_oauth_client.py carol carol123 db_readonly "SELECT ssn FROM customers"
