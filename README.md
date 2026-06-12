@@ -142,20 +142,32 @@ ask a question → client gets 401 → discovers Keycloak → browser opens
 
 ### Claude Desktop
 
-Settings → **Connectors** → **Add custom connector** → URL:
+Desktop's **Add custom connector** UI requires an **HTTPS** URL, so this plain-HTTP
+local demo connects through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)
+bridge instead. It runs locally, speaks HTTP to the server, and performs the *same*
+OAuth flow (DCR + browser login), caching the token in `~/.mcp-auth` — **no token
+in the config**. Merge this into
+`~/Library/Application Support/Claude/claude_desktop_config.json`
+(full file: `claude_desktop_config.example.json`):
 
+```json
+{
+  "mcpServers": {
+    "banking-db-mcp": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://mcp-postgres.traefik.test/mcp", "--allow-http"]
+    }
+  }
+}
 ```
-http://mcp-postgres.traefik.test/mcp
-```
 
-First time you use a tool, a browser window opens to the Keycloak login. Log in
-as `alice` / `bob` / `carol` (passwords below) — Desktop stores the token and
-reuses it. Switch users by reconnecting the connector.
+Requires Node.js (for `npx`). `--allow-http` is needed because the server is HTTP
+on a `.test` host. **Fully quit (⌘Q) and reopen Claude Desktop**, then use a tool —
+a browser opens to the Keycloak login. Log in as `alice` / `bob` / `carol` (below);
+the token is cached. To switch users: quit, `rm -rf ~/.mcp-auth`, reopen.
 
-> Older Desktop builds without custom connectors can bridge via
-> [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) — it runs the *same*
-> OAuth flow and caches tokens in `~/.mcp-auth`, so **no token in the config**:
-> see `claude_desktop_config.example.json`.
+> If you have a Desktop build whose connector UI accepts HTTP, or you front the
+> server with HTTPS (e.g. `mkcert`), you can add the URL directly instead of the bridge.
 
 ### Claude Code
 

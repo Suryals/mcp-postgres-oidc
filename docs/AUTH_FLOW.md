@@ -343,6 +343,9 @@ Same query, three identities:
 | Keycloak 26.6 refuses to boot | disabling both DCR host checks is illegal | enable `client-uris-must-match`, trust localhost/claude.ai |
 | Server can't fetch `keycloak.test` metadata | hostname only resolved on the host, not in-container | Traefik network **alias** for `keycloak.test` |
 | `iss` mismatch between server and browser | split internal/external URLs | single `realm_url`, same alias |
+| Claude Desktop won't accept the URL | custom-connector UI requires **HTTPS** | connect via the `mcp-remote` stdio bridge (talks HTTP locally) |
+| `mcp-remote`: "Non-HTTPS URLs are only allowed for localhost" | it blocks plain HTTP by default | pass `--allow-http` (safe for a local `.test` host) |
+| DCR rejected: "URL doesn't match any trusted host" | `mcp-remote` registers `client_uri: github.com/modelcontextprotocol/mcp-cli` | add `github.com` to the realm's DCR trusted-hosts |
 
 ---
 

@@ -133,7 +133,12 @@
         "config": {
           "host-sending-registration-request-must-match": ["false"],
           "client-uris-must-match": ["true"],
-          "trusted-hosts": ["localhost", "127.0.0.1", "claude.ai", "claude.com"]
+          "trusted-hosts": [
+            "localhost", "127.0.0.1",
+            "github.com",
+            "mcp-postgres.traefik.test", "traefik.test",
+            "claude.ai", "claude.com"
+          ]
         }
       }
     ]

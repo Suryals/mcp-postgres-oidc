@@ -1,12 +1,13 @@
 {
-  "_comment": "For older Claude Desktop builds without native custom connectors. mcp-remote runs the full MCP OAuth flow itself (DCR + browser login) and caches the token in ~/.mcp-auth — so there is NO token to paste here. Newer Desktop: just add the URL as a custom connector instead.",
+  "_comment": "Claude Desktop's custom-connector UI requires HTTPS, so for this HTTP demo use the mcp-remote bridge instead. It runs locally, speaks HTTP to the server, and runs the full MCP OAuth flow itself (DCR + browser login) — caching the token in ~/.mcp-auth. No token to paste. --allow-http is required because the server is plain HTTP on a .test host (not localhost). Needs Node.js (npx).",
   "mcpServers": {
-    "mcp-postgres-oidc": {
+    "banking-db-mcp": {
       "command": "npx",
       "args": [
         "-y",
         "mcp-remote",
-        "http://mcp-postgres.traefik.test/mcp"
+        "http://mcp-postgres.traefik.test/mcp",
+        "--allow-http"
       ]
     }
   }
