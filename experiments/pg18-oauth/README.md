@@ -56,18 +56,50 @@ host all all 0.0.0.0/0 oauth issuer="https://keycloak.test/realms/mcp-db" \
 The requested **login role** becomes the `<scope>` half of the permission string
 (`appdb#db_readonly`), so the DB role name must match a Keycloak scope.
 
-## Status
+## Status — ✅ PROVEN END TO END
 
 | Step | State |
 |------|-------|
-| Validator binary works in stock `postgres:18` (`LOAD 'kc_validator'`) | ✅ **proven** (this dir) |
-| ABI/deps (needs `libcurl4`) | ✅ baked into `Dockerfile` |
-| Architecture + exact config mapped | ✅ this doc |
-| HTTPS on Keycloak (PG18 requires an HTTPS issuer) | ⏳ TODO |
-| Keycloak **Authorization Services** (resource-server client, resource `appdb`, scopes = `db_admin/db_analyst/db_readonly`, permissions `appdb#<scope>`, user policies) | ⏳ TODO |
-| Postgres roles + **column GRANTs** (readonly has no `SELECT` on `ssn` etc.) + `pg_ident` delegate map | ⏳ TODO |
-| RFC 8693 token-exchange in the MCP server (re-audience user token → `aud=postgres`) | ⏳ TODO |
-| Client proof: present a Keycloak bearer, log in as the role, `permission denied` on `ssn` | ⏳ TODO (via `psql`/libpq) |
+| Validator loads in stock `postgres:18` (`LOAD 'kc_validator'`) | ✅ |
+| ABI/deps (`libcurl4` + CA trust) | ✅ `Dockerfile` |
+| HTTPS Keycloak with an HTTPS issuer | ✅ `docker-compose.yml` + `certs/` |
+| Keycloak **Authorization Services** (resource `appdb`, scopes = the 3 roles, role policies, `appdb#<scope>` permissions) | ✅ `setup_authz.sh` |
+| UMA decision matrix verified (carol→readonly allow, carol→admin deny, …) | ✅ |
+| Postgres roles + **column GRANTs** (readonly: no `ssn`; analyst: no `balance`) | ✅ `pg/init/01_roles_grants.sql` |
+| `oauth` `pg_hba` + `delegate_ident_mapping` + validator GUCs | ✅ `pg/pg_hba.conf` + compose `-c kc.*` |
+| **Client proof** — Keycloak bearer → `OAUTHBEARER` token-first → login as role | ✅ `pg_oauth_client.py` |
+
+### The proof (live output)
+
+```
+carol → db_readonly, SELECT ssn        ⛔ Postgres DENIED (column not granted)
+carol → db_readonly, allowed columns   ✓ rows returned
+carol → db_admin                       ⛔ Keycloak DENIED the connection (no escalation)
+alice → db_admin,    SELECT ssn        ✓ 692-19-1742 (admin sees real PII)
+bob   → db_analyst,  ssn ✓ / balance   ✓ ssn  /  ⛔ balance DENIED
+```
+
+Two enforcement points, both outside the app: **Keycloak** decides *who may assume
+which role* (connection auth); **Postgres** decides *which columns that role reads*
+(column GRANTs). No `mcp_user`. App masking is now cosmetic-only.
+
+### Reproduce
+
+```bash
+docker compose up -d --build          # HTTPS Keycloak + PG18 + validator
+./setup_authz.sh                       # Keycloak Authorization Services
+uv run --with httpx pg_oauth_client.py carol carol123 db_readonly "SELECT ssn FROM customers"
+#   -> Postgres DENIED the query: permission denied
+uv run --with httpx pg_oauth_client.py alice alice123 db_admin    "SELECT ssn FROM customers"
+#   -> rows: [['692-19-1742']]
+```
+
+### Still open (for the *MCP server* path, not the architecture)
+- **RFC 8693 token-exchange** to re-audience the user's MCP token → `aud=postgres`
+  before connecting (here the client gets the token directly for clarity).
+- **asyncpg/psycopg3 OAUTHBEARER** support so the *production* MCP server connects
+  per-user. `pg_oauth_client.py` shows the exact token-first wire format that a
+  driver needs — it's ~20 lines.
 
 ## The one true blocker for the *MCP server itself*
 

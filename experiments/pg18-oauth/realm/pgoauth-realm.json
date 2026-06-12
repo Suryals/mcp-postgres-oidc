@@ -1,0 +1,46 @@
+{
+  "realm": "pgoauth",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      { "name": "db_admin" },
+      { "name": "db_analyst" },
+      { "name": "db_readonly" }
+    ]
+  },
+  "users": [
+    { "username": "alice", "enabled": true, "email": "alice@pg.demo", "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "alice123", "temporary": false }],
+      "realmRoles": ["db_admin"] },
+    { "username": "bob", "enabled": true, "email": "bob@pg.demo", "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "bob123", "temporary": false }],
+      "realmRoles": ["db_analyst"] },
+    { "username": "carol", "enabled": true, "email": "carol@pg.demo", "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "carol123", "temporary": false }],
+      "realmRoles": ["db_readonly"] }
+  ],
+  "clients": [
+    {
+      "clientId": "pg-client",
+      "name": "Postgres login client (device flow + direct grant for tests)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["*"],
+      "attributes": { "oauth2.device.authorization.grant.enabled": "true" }
+    },
+    {
+      "clientId": "postgres-resource",
+      "name": "Postgres resource server (kc_validator queries this for UMA decisions)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "postgres-resource-secret",
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": true
+    }
+  ]
+}
