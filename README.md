@@ -4,7 +4,7 @@
 
 A portfolio-grade MCP server exposing a PostgreSQL banking database with:
 
-- **OIDC authentication** via Keycloak (JWT/RS256, JWKS validation)
+- **Native MCP OAuth** — Keycloak via FastMCP's `KeycloakAuthProvider`: protected-resource metadata, Dynamic Client Registration, browser PKCE login, cached tokens (no token to paste)
 - **Role-based column masking** (db_admin / db_analyst / db_readonly)
 - **Query guardrails** (SELECT-only, row limits, rate limiting, table ACLs)
 - **Full audit trail** (every query logged with user, roles, masked columns)
@@ -71,49 +71,35 @@ uv run --with httpx scripts/smoke_test.py
 
 ---
 
-## PKCE Login (Browser Flow)
+## Auth Flow (native MCP OAuth)
 
-Open your browser and go to:
-```
-http://mcp-postgres.traefik.test/auth/login
-```
-
-This starts the Authorization Code + PKCE flow:
-1. Server generates PKCE challenge, redirects to Keycloak login page
-2. You log in as alice / bob / carol
-3. Keycloak redirects back to `/auth/callback`
-4. Server exchanges the code for a token (using stored PKCE verifier)
-5. Page shows your **access token** with a copy button and ready-to-paste MCP config
-
-No client secret needed — `mcp-cli` is a public client with PKCE (`S256`).
-
----
-
-## Auth Flow
+The server is an OAuth 2.0 resource server. An MCP client needs no pre-shared
+token — it discovers everything and runs the browser login itself:
 
 ```
-Client
-  │  1. GET token from Keycloak
-  │     POST http://keycloak.test/realms/mcp-db/protocol/openid-connect/token
-  │
-  │  2. Call MCP tool
-  │     Authorization: Bearer <token>
-  │
-  ▼
-OIDCMiddleware
-  │  3. Fetch JWKS from auth-keycloak:8080 (internal)
-  │  4. Validate RS256 signature + expiry + issuer
-  │  5. Extract realm roles → db_admin | db_analyst | db_readonly
-  │
-  ▼
-Guardrails
-  │  6. SELECT-only check
-  │  7. Table ACL check
-  │  8. LIMIT injection
-  │
-  ▼
-PostgreSQL → Column Masking → Audit Log → Response
+Client                                   MCP Server            Keycloak
+  │  1. call a tool (no token)                │                    │
+  │ ─────────────────────────────────────────▶ 401 +              │
+  │                                           │ WWW-Authenticate   │
+  │                                           │ resource_metadata  │
+  │  2. GET /.well-known/oauth-protected-resource  ───────────────▶│
+  │     → authorization_servers: [keycloak/realms/mcp-db]          │
+  │  3. GET …/.well-known/openid-configuration ───────────────────▶│
+  │  4. Dynamic Client Registration (DCR) ────────────────────────▶│  new client
+  │  5. browser: Authorization Code + PKCE  ──────────────────────▶│  user logs in
+  │     ◀───────────────────────────────── access token (cached)  │
+  │  6. retry tool  Authorization: Bearer <token> ─▶ validate vs   │
+  │                                           │      JWKS, extract │
+  │                                           │      realm roles   │
+  │                                           ▼                    │
+  │                       Guardrails (SELECT-only · ACL · LIMIT)   │
+  │                                           ▼                    │
+  │              PostgreSQL → Column Masking → Audit Log → Response│
 ```
+
+Steps 1–5 happen once; the cached token is reused silently afterward. Token
+validation and all of the OAuth metadata/DCR plumbing are handled by FastMCP's
+`KeycloakAuthProvider`.
 
 ---
 
@@ -139,57 +125,53 @@ TOKEN=$(curl -s -X POST \
 
 ## Use it from Claude
 
-The server speaks streamable-HTTP MCP and expects `Authorization: Bearer <token>`.
-First mint a token (valid ~1h):
+There's **nothing to paste**. The server implements the MCP Authorization spec
+(OAuth 2.0 protected-resource metadata + Dynamic Client Registration), so the
+client discovers Keycloak on its own, pops a browser login, and caches the token.
 
-```bash
-./scripts/get_token.sh alice    # alice=admin · bob=analyst · carol=readonly
+**The natural flow:**
+
 ```
+ask a question → client gets 401 → discovers Keycloak → browser opens
+→ log in as alice / bob / carol → token cached → every later query is silent
+```
+
+### Claude Desktop
+
+Settings → **Connectors** → **Add custom connector** → URL:
+
+```
+http://mcp-postgres.traefik.test/mcp
+```
+
+First time you use a tool, a browser window opens to the Keycloak login. Log in
+as `alice` / `bob` / `carol` (passwords below) — Desktop stores the token and
+reuses it. Switch users by reconnecting the connector.
+
+> Older Desktop builds without custom connectors can bridge via
+> [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) — it runs the *same*
+> OAuth flow and caches tokens in `~/.mcp-auth`, so **no token in the config**:
+> see `claude_desktop_config.example.json`.
 
 ### Claude Code
 
 ```bash
-claude mcp add --transport http mcp-postgres-oidc \
-  http://mcp-postgres.traefik.test/mcp \
-  --header "Authorization: Bearer $(./scripts/get_token.sh alice)"
-
+claude mcp add --transport http mcp-postgres-oidc http://mcp-postgres.traefik.test/mcp
+# first tool call triggers the browser login, then the token is cached
 claude mcp list      # → mcp-postgres-oidc ... ✔ Connected
 ```
 
-Then ask Claude things like *"list the tables"* or *"search customers named
-Smith"* and watch the masking apply per role.
+Then ask *"list the tables"* or *"search for customers named Smith"* and watch
+the masking change with whoever you logged in as.
 
-### Claude Desktop
+### Quick CLI check (no browser)
 
-Desktop bridges remote MCP servers through [`mcp-remote`](https://www.npmjs.com/package/mcp-remote).
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`
-(see `claude_desktop_config.example.json` in this repo):
+For scripted testing there's still a password-grant path (the `mcp-test` client):
 
-```json
-{
-  "mcpServers": {
-    "mcp-postgres-oidc": {
-      "command": "npx",
-      "args": [
-        "-y", "mcp-remote",
-        "http://mcp-postgres.traefik.test/mcp",
-        "--header", "Authorization: Bearer ${MCP_TOKEN}"
-      ],
-      "env": { "MCP_TOKEN": "<paste a token from ./scripts/get_token.sh>" }
-    }
-  }
-}
+```bash
+./scripts/get_token.sh alice          # alice=admin · bob=analyst · carol=readonly
+uv run --with httpx scripts/smoke_test.py
 ```
-
-Restart Claude Desktop, then look for **mcp-postgres-oidc** in the tools (🔌) menu.
-
-> Requires Node.js (for `npx`) and the `/etc/hosts` entry from Quick Start so
-> Desktop can resolve `mcp-postgres.traefik.test`. Tokens expire — re-run
-> `get_token.sh` and update `MCP_TOKEN` when calls start returning 401.
-
-> **Browser login instead of a script:** open
-> `http://mcp-postgres.traefik.test/auth/login` for the PKCE flow, which returns
-> a token with a copy button (log in as alice / bob / carol).
 
 ---
 
@@ -237,9 +219,10 @@ Everything below runs from a single `docker compose up`, on one bridge network
    keycloak.test ────────┘            mcp-postgres.traefik.test
         │                                    │
         ▼                                    ▼
-   Keycloak                            OIDCMiddleware
-   (mcp-db realm,                      (validates JWT vs Keycloak JWKS,
-    auto-imported)  ◄───JWKS (in-net)── extracts realm roles)
+   Keycloak                       FastMCP KeycloakAuthProvider
+   (mcp-db realm,                  (OAuth metadata + DCR proxy;
+    auto-imported)  ◄──JWKS/DCR──   validates JWT vs JWKS,
+                                    extracts realm roles)
                                              │
                                        FastMCP (streamable-http)
                                        ┌─────┴────────┐
@@ -252,9 +235,9 @@ Everything below runs from a single `docker compose up`, on one bridge network
                                         seeder (one-shot)
 ```
 
-- The MCP server fetches JWKS **in-network** (`http://keycloak:8080`) but
-  validates the token issuer against the **public** URL
-  (`http://keycloak.test/realms/mcp-db`) — the classic split-horizon setup.
+- `keycloak.test` is aliased to Traefik **inside** the network too, so the MCP
+  server and the browser use the **same** Keycloak URL — no split-horizon config,
+  and the token issuer matches end to end.
 - `dockerproxy` is a tiny nginx shim that lets Traefik talk to Docker daemons
   requiring API ≥ 1.40 (e.g. OrbStack). Traefik is constrained to this compose
   project so it never touches other containers on your host.

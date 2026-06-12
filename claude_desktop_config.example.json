@@ -1,17 +1,13 @@
 {
+  "_comment": "For older Claude Desktop builds without native custom connectors. mcp-remote runs the full MCP OAuth flow itself (DCR + browser login) and caches the token in ~/.mcp-auth — so there is NO token to paste here. Newer Desktop: just add the URL as a custom connector instead.",
   "mcpServers": {
     "mcp-postgres-oidc": {
       "command": "npx",
       "args": [
         "-y",
         "mcp-remote",
-        "http://mcp-postgres.traefik.test/mcp",
-        "--header",
-        "Authorization: Bearer ${MCP_TOKEN}"
-      ],
-      "env": {
-        "MCP_TOKEN": "PASTE_A_TOKEN_FROM_./scripts/get_token.sh_HERE"
-      }
+        "http://mcp-postgres.traefik.test/mcp"
+      ]
     }
   }
 }

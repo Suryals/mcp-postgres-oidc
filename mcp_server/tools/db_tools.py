@@ -20,7 +20,7 @@ from typing import Any
 import asyncpg
 from fastmcp import FastMCP
 
-from auth.oidc import current_user, UserContext
+from auth.identity import get_current_user, UserContext
 from guardrails.query_guard import validate_and_rewrite, GuardrailError
 from masking.engine import mask_rows
 from config import settings
@@ -41,10 +41,7 @@ def register_tools(mcp: FastMCP, pool: asyncpg.Pool) -> None:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_user() -> UserContext:
-    user = current_user.get()
-    if user is None:
-        raise PermissionError("No authenticated user in context")
-    return user
+    return get_current_user()
 
 
 async def _write_audit(
