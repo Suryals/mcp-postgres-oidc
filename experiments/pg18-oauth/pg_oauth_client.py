@@ -99,5 +99,13 @@ def run(login_role, token, sql):
 
 
 if __name__ == "__main__":
-    user, pw, role, sql = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-    run(role, get_token(user, pw), sql)
+    # Two forms:
+    #   pg_oauth_client.py <user> <pw> <login-role> "<SQL>"        (fetch token directly)
+    #   pg_oauth_client.py --token <token> <login-role> "<SQL>"    (present a pre-obtained
+    #                                                               token, e.g. exchanged)
+    if sys.argv[1] == "--token":
+        token, role, sql = sys.argv[2], sys.argv[3], sys.argv[4]
+    else:
+        user, pw, role, sql = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+        token = get_token(user, pw)
+    run(role, token, sql)

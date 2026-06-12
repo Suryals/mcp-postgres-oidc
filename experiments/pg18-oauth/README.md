@@ -95,12 +95,26 @@ uv run --with httpx pg_oauth_client.py alice alice123 db_admin    "SELECT ssn FR
 #   -> rows: [['692-19-1742']]
 ```
 
-### Still open (for the *MCP server* path, not the architecture)
-- **RFC 8693 token-exchange** to re-audience the user's MCP token → `aud=postgres`
-  before connecting (here the client gets the token directly for clarity).
-- **asyncpg/psycopg3 OAUTHBEARER** support so the *production* MCP server connects
-  per-user. `pg_oauth_client.py` shows the exact token-first wire format that a
-  driver needs — it's ~20 lines.
+### RFC 8693 token-exchange — the real MCP→DB hop (also ✅)
+
+`setup_exchange.sh` adds an `mcp-exchanger` client (the MCP server). `demo_full_hop.sh`:
+the user logs in → token issued to the MCP server → **Standard Token Exchange**
+re-audiences it to `postgres-resource` → that exchanged token is presented to PG18.
+
+```bash
+./setup_exchange.sh
+./demo_full_hop.sh carol carol123 db_readonly "SELECT ssn FROM customers"
+#   token-exchange: carol → aud=postgres-resource
+#   ⛔ Postgres DENIED the query: permission denied
+./demo_full_hop.sh alice alice123 db_admin "SELECT ssn FROM customers"
+#   ✓ rows: [['692-19-1742']]
+```
+The DB never sees the broad MCP-audience token — only a narrowly re-audienced one.
+
+### The one true remaining gap (production MCP server, not the architecture)
+- **asyncpg/psycopg3 OAUTHBEARER** support so the *production* MCP server opens
+  per-user connections. `pg_oauth_client.py` is the working token-first proof — the
+  ~20 lines of wire format a Python driver needs once it lands.
 
 ## The one true blocker for the *MCP server itself*
 
