@@ -129,9 +129,19 @@ logged-in user:
 | email  | `alice@gmail.com`    | `a***@gmail.com`   | `****@*****.***`       |
 | salary | `120000.00`          | `[REDACTED]`       | `[REDACTED]`           |
 
-And tool-level RBAC: `get_audit_log` returns *"requires db_admin role"* for anyone
-below admin. The authorization is driven by the **OIDC identity**, not by trusting
-the caller.
+The *same* "show me 3 customers with name, ssn, email" prompt in Claude Desktop,
+logged in as two different users:
+
+| `db_admin` (alice) — full PII | `db_readonly` (carol) — redacted |
+|-------------------------------|----------------------------------|
+| ![admin sees real values](docs/screenshots/claude-desktop-list-tables.png) | ![readonly sees masks](docs/screenshots/claude-desktop-masked-readonly.png) |
+
+And tool-level RBAC — `get_audit_log` as a non-admin is refused, by role:
+
+![audit log denied for db_readonly](docs/screenshots/claude-desktop-audit-denied.png)
+
+The authorization is driven by the **OIDC identity**, not by trusting the caller —
+same server, same query, different principal, different data.
 
 ---
 
