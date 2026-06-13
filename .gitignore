@@ -22,3 +22,6 @@ keycloak/import/*.json
 
 # Logs / runtime
 *.log
+
+# Internal build brief — not published (could be ingested by a coding agent)
+docs/PORTFOLIO_HANDOFF.md
