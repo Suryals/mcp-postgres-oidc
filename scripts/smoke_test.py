@@ -5,6 +5,7 @@ Exercises the full path: Keycloak token -> Traefik -> OIDC middleware -> FastMCP
 Usage: uv run --with httpx scripts/smoke_test.py
 """
 import json
+import os
 import sys
 import httpx
 
@@ -12,10 +13,27 @@ KC = "http://keycloak.test/realms/mcp-db/protocol/openid-connect/token"
 MCP = "http://mcp-postgres.traefik.test/mcp"
 
 
+def _load_env() -> dict:
+    """Read the generated .env (repo root) so creds aren't hardcoded."""
+    env = dict(os.environ)
+    path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(path):
+        for line in open(path):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env.setdefault(k, v)
+    return env
+
+
+ENV = _load_env()
+
+
 def get_token(user: str, pw: str) -> str:
     r = httpx.post(KC, data={
         "grant_type": "password", "client_id": "mcp-test",
-        "client_secret": "mcp-test-secret", "username": user, "password": pw,
+        "client_secret": ENV["MCP_TEST_CLIENT_SECRET"], "username": user,
+        "password": pw, "scope": "openid mcp-roles",
     })
     r.raise_for_status()
     return r.json()["access_token"]
@@ -61,8 +79,8 @@ def show(label: str, token: str):
 
 
 if __name__ == "__main__":
-    users = [("alice", "alice123", "ADMIN"),
-             ("bob", "bob123", "ANALYST"),
-             ("carol", "carol123", "READONLY")]
+    users = [("alice", ENV["ALICE_PASSWORD"], "ADMIN"),
+             ("bob", ENV["BOB_PASSWORD"], "ANALYST"),
+             ("carol", ENV["CAROL_PASSWORD"], "READONLY")]
     for u, p, role in users:
         show(f"{u} ({role})", get_token(u, p))

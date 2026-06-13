@@ -82,7 +82,7 @@
       "description": "Direct-access grant for scripts/get_token.sh and smoke tests. Not used by the browser OAuth flow.",
       "enabled": true,
       "publicClient": false,
-      "secret": "mcp-test-secret",
+      "secret": "${MCP_TEST_CLIENT_SECRET}",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
@@ -98,7 +98,7 @@
       "enabled": true,
       "firstName": "Alice",
       "lastName": "Admin",
-      "credentials": [ { "type": "password", "value": "alice123", "temporary": false } ],
+      "credentials": [ { "type": "password", "value": "${ALICE_PASSWORD}", "temporary": false } ],
       "realmRoles": ["db_admin"]
     },
     {
@@ -108,7 +108,7 @@
       "enabled": true,
       "firstName": "Bob",
       "lastName": "Analyst",
-      "credentials": [ { "type": "password", "value": "bob123", "temporary": false } ],
+      "credentials": [ { "type": "password", "value": "${BOB_PASSWORD}", "temporary": false } ],
       "realmRoles": ["db_analyst"]
     },
     {
@@ -118,7 +118,7 @@
       "enabled": true,
       "firstName": "Carol",
       "lastName": "Readonly",
-      "credentials": [ { "type": "password", "value": "carol123", "temporary": false } ],
+      "credentials": [ { "type": "password", "value": "${CAROL_PASSWORD}", "temporary": false } ],
       "realmRoles": ["db_readonly"]
     }
   ],

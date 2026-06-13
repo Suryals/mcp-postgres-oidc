@@ -6,10 +6,13 @@ __pycache__/
 venv/
 .uv/
 
-# Env / secrets (none committed today, but never start)
+# Locally-generated credentials — never committed (.env.example IS tracked)
 .env
-.env.*
-*.local
+.env.local
+!.env.example
+
+# Rendered Keycloak realm (built from realm.template.json at bring-up)
+keycloak/import/*.json
 
 # OS / editor
 .DS_Store

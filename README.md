@@ -1,281 +1,226 @@
-# MCP Postgres OIDC
+# Principal Propagation (MCP reference implementation)
 
-> ⚠️ **Demo lab — all credentials in this repo are throwaway values** (`alice123`, `mcp_secret`, etc.) for a fully self-contained local environment. No real secrets are committed. Do not deploy as-is.
+**A reference pattern for letting an AI agent — or any application — access a
+regulated data source *as the end user*, with no service account, and with
+authentication, authorization, and audit enforced at the source.**
 
-A portfolio-grade MCP server exposing a PostgreSQL banking database with:
+> The hard part of agent/data access isn't connecting to the database — it's
+> answering *"who is really asking, what may **they** see, and can we prove it
+> afterward?"* This repo is a runnable, end-to-end answer.
 
-- **Native MCP OAuth** — Keycloak via FastMCP's `KeycloakAuthProvider`: protected-resource metadata, Dynamic Client Registration, browser PKCE login, cached tokens (no token to paste)
-- **Role-based column masking** (db_admin / db_analyst / db_readonly)
-- **Query guardrails** (SELECT-only, row limits, rate limiting, table ACLs)
-- **Full audit trail** (every query logged with user, roles, masked columns)
-- **Traefik integration** — exposed at `http://mcp-postgres.traefik.test`
+```
+clone → ./up.sh → log in as a user → every query runs as them, masked by their role, audited
+```
 
-Claude Desktop calling the server live — it ran the OAuth login itself and the
-server reports the authenticated role (`db_admin`) and each table's masking policy:
-
-![Claude Desktop listing tables as db_admin](docs/screenshots/claude-desktop-list-tables.png)
+![Claude Desktop calling the server as db_admin](docs/screenshots/claude-desktop-list-tables.png)
 
 ---
 
-## Prerequisites
+## The problem
 
-- **Docker** (Docker Desktop or OrbStack)
-- Port **80** free (Traefik binds it — override with `TRAEFIK_WEB_PORT` if needed)
-- `curl`, `jq` (only for the command-line examples below)
+An agent needs to query a customer/banking database. The usual shortcut:
 
-Everything else — Keycloak, the realm, the database, the seed data — is bundled
-and starts automatically. No other repos or services required.
+```
+agent ── one shared "app" DB account (full access) ──▶ database
+```
+
+That **service account** is the compliance hole:
+
+- **AuthN is lost.** The database sees `app_user`, never the human. "Who ran this
+  query?" has no real answer.
+- **AuthZ is coarse.** The shared account can read everything; the *app* is trusted
+  to self-limit. One bug = full PII exposure.
+- **Audit is fiction.** The audit trail records the service account, not the
+  principal — useless for SOC 2 / PCI / GDPR "who accessed this data" questions.
+
+## The pattern: propagate the principal to the source
+
+Carry the **end user's verified identity** all the way down, and enforce the three
+compliance questions where the data actually lives:
+
+| Question | Enforced by | Here |
+|----------|-------------|------|
+| **AuthN** — who is asking? | OIDC / Keycloak | browser login (PKCE), JWT validated per request |
+| **AuthZ** — what may *they* see? | the user's **role**, not the app | role-based column masking + per-tool ACLs |
+| **Audit** — what happened? | logged against the **real user** | every query recorded with user + roles + masked columns |
+
+No shared service account stands in for the user. The identity *is* the principal,
+end to end.
 
 ---
 
-## Quick Start
+## Quick start (clone & run)
 
-### 1. Map the demo hostnames to localhost (one time)
+**Requirements:** Docker, and port `80` free. That's it — Keycloak, Postgres, the
+seed data, and the MCP server are all bundled and wired up.
 
 ```bash
-echo "127.0.0.1 keycloak.test mcp-postgres.traefik.test" | sudo tee -a /etc/hosts
+git clone https://github.com/Suryals/principal-propagation-mcp.git
+cd principal-propagation-mcp
+./up.sh
 ```
 
-> On OrbStack, `*.test` already resolves to localhost — you can skip this.
+`up.sh` **generates local credentials on first run** (random, written to a
+git-ignored `.env` — nothing sensitive is committed), renders the Keycloak realm,
+starts the stack, and prints your demo logins:
 
-### 2. Bring up the whole stack
-
-```bash
-git clone https://github.com/Suryals/mcp-postgres-oidc.git
-cd mcp-postgres-oidc
-docker compose up -d --build
+```
+  Demo logins (generated locally this run):
+    alice  / <generated>   → db_admin     (sees everything)
+    bob    / <generated>   → db_analyst   (partial PII masking)
+    carol  / <generated>   → db_readonly  (PII fully redacted)
 ```
 
-That single command starts **everything**:
+> `*.test` hostnames: OrbStack resolves them automatically. On other setups, add
+> once: `echo "127.0.0.1 keycloak.test mcp-postgres.traefik.test" | sudo tee -a /etc/hosts`
 
-| Service | Role |
-|---------|------|
-| `mcp-postgres` | PostgreSQL with the banking schema |
-| `seeder` | one-shot: loads ~2,000 customers / ~4,000 accounts / ~53,000 transactions, then exits |
-| `keycloak` | OIDC provider — **auto-imports** the `mcp-db` realm (3 roles, 3 users) |
-| `mcp-server` | the MCP server itself |
-| `traefik` (+ `dockerproxy`) | routes `keycloak.test` and `mcp-postgres.traefik.test` |
-
-Give Keycloak ~30s on first boot, then check it's live:
+Verify it end-to-end (same query as three roles → three different views):
 
 ```bash
-curl -s http://mcp-postgres.traefik.test/health        # {"status":"ok",...}
-curl -s http://keycloak.test/realms/mcp-db | jq .realm  # "mcp-db"
-```
-
-> **Port 80 in use?** Run `TRAEFIK_WEB_PORT=8080 docker compose up -d` and use
-> `http://mcp-postgres.traefik.test:8080` / `http://keycloak.test:8080` instead.
-
-### 3. See it work
-
-```bash
-# Get a token and run the same query as each role — watch the PII masking change
-TOKEN=$(./scripts/get_token.sh alice)   # or bob / carol
 uv run --with httpx scripts/smoke_test.py
-```
-
----
-
-## Auth Flow (native MCP OAuth)
-
-The server is an OAuth 2.0 resource server. An MCP client needs no pre-shared
-token — it discovers everything and runs the browser login itself:
-
-```
-Client                                   MCP Server            Keycloak
-  │  1. call a tool (no token)                │                    │
-  │ ─────────────────────────────────────────▶ 401 +              │
-  │                                           │ WWW-Authenticate   │
-  │                                           │ resource_metadata  │
-  │  2. GET /.well-known/oauth-protected-resource  ───────────────▶│
-  │     → authorization_servers: [keycloak/realms/mcp-db]          │
-  │  3. GET …/.well-known/openid-configuration ───────────────────▶│
-  │  4. Dynamic Client Registration (DCR) ────────────────────────▶│  new client
-  │  5. browser: Authorization Code + PKCE  ──────────────────────▶│  user logs in
-  │     ◀───────────────────────────────── access token (cached)  │
-  │  6. retry tool  Authorization: Bearer <token> ─▶ validate vs   │
-  │                                           │      JWKS, extract │
-  │                                           │      realm roles   │
-  │                                           ▼                    │
-  │                       Guardrails (SELECT-only · ACL · LIMIT)   │
-  │                                           ▼                    │
-  │              PostgreSQL → Column Masking → Audit Log → Response│
-```
-
-Steps 1–5 happen once; the cached token is reused silently afterward. Token
-validation and all of the OAuth metadata/DCR plumbing are handled by FastMCP's
-`KeycloakAuthProvider`.
-
-> 📖 **Full technical readout:** [`docs/AUTH_FLOW.md`](docs/AUTH_FLOW.md) — every
-> step (RFC 9728/8414/7591 + PKCE), the Keycloak realm settings that make DCR
-> carry roles, the split-horizon network alias, and the problems solved.
-
----
-
-## Test Users
-
-| User  | Password  | Role         | Can see                          |
-|-------|-----------|--------------|----------------------------------|
-| alice | alice123  | db_admin     | Everything unmasked + audit_logs |
-| bob   | bob123    | db_analyst   | Partial masks on PII             |
-| carol | carol123  | db_readonly  | Fully redacted sensitive columns |
-
-### Get a token (password grant — dev only)
-
-```bash
-TOKEN=$(curl -s -X POST \
-  http://keycloak.test/realms/mcp-db/protocol/openid-connect/token \
-  -d 'grant_type=password&client_id=mcp-test&client_secret=mcp-test-secret' \
-  -d 'username=alice&password=alice123' \
-  | jq -r '.access_token')
 ```
 
 ---
 
 ## Use it from Claude
 
-There's **nothing to paste**. The server implements the MCP Authorization spec
-(OAuth 2.0 protected-resource metadata + Dynamic Client Registration), so the
-client discovers Keycloak on its own, pops a browser login, and caches the token.
-
-**The natural flow:**
+There's **nothing to paste** — the server implements the MCP Authorization spec
+(protected-resource metadata + Dynamic Client Registration), so the client
+discovers Keycloak, pops a browser login, and caches the token.
 
 ```
-ask a question → client gets 401 → discovers Keycloak → browser opens
-→ log in as alice / bob / carol → token cached → every later query is silent
+ask a question → 401 → discovers Keycloak → browser login (alice/bob/carol)
+→ token cached → every later query is silent, scoped to that user's role
 ```
 
-### Claude Desktop
+**Claude Code:**
+```bash
+claude mcp add --transport http banking-db-mcp http://mcp-postgres.traefik.test/mcp
+# first tool call opens the browser login; token is cached after that
+```
 
-Desktop's **Add custom connector** UI requires an **HTTPS** URL, so this plain-HTTP
-local demo connects through the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote)
-bridge instead. It runs locally, speaks HTTP to the server, and performs the *same*
-OAuth flow (DCR + browser login), caching the token in `~/.mcp-auth` — **no token
-in the config**. Merge this into
-`~/Library/Application Support/Claude/claude_desktop_config.json`
-(full file: `claude_desktop_config.example.json`):
+**Claude Desktop** (its connector UI requires HTTPS, so this HTTP demo bridges via
+[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) — same OAuth flow, token
+cached in `~/.mcp-auth`, nothing to paste). Merge into
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
-{
-  "mcpServers": {
-    "banking-db-mcp": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://mcp-postgres.traefik.test/mcp", "--allow-http"]
-    }
-  }
-}
+{ "mcpServers": { "banking-db-mcp": {
+  "command": "npx",
+  "args": ["-y", "mcp-remote", "http://mcp-postgres.traefik.test/mcp", "--allow-http"]
+}}}
 ```
 
-Requires Node.js (for `npx`). `--allow-http` is needed because the server is HTTP
-on a `.test` host. **Fully quit (⌘Q) and reopen Claude Desktop**, then use a tool —
-a browser opens to the Keycloak login. Log in as `alice` / `bob` / `carol` (below);
-the token is cached. To switch users: quit, `rm -rf ~/.mcp-auth`, reopen.
+Then ask *"list the tables"* or *"show 3 customers with name, ssn, email"* — and
+watch the data change with whoever you logged in as.
 
-> If you have a Desktop build whose connector UI accepts HTTP, or you front the
-> server with HTTPS (e.g. `mkcert`), you can add the URL directly instead of the bridge.
-
-### Claude Code
-
-```bash
-claude mcp add --transport http mcp-postgres-oidc http://mcp-postgres.traefik.test/mcp
-# first tool call triggers the browser login, then the token is cached
-claude mcp list      # → mcp-postgres-oidc ... ✔ Connected
-```
-
-Then ask *"list the tables"* or *"search for customers named Smith"* and watch
-the masking change with whoever you logged in as.
-
-### Quick CLI check (no browser)
-
-For scripted testing there's still a password-grant path (the `mcp-test` client):
-
-```bash
-./scripts/get_token.sh alice          # alice=admin · bob=analyst · carol=readonly
-uv run --with httpx scripts/smoke_test.py
-```
+📖 **The full OAuth flow, step by step:** [`docs/AUTH_FLOW.md`](docs/AUTH_FLOW.md).
 
 ---
 
-## Masking Reference
+## Same query, different principal
 
-| Column         | db_admin          | db_analyst          | db_readonly        |
-|----------------|-------------------|---------------------|--------------------|
-| ssn            | `123-45-6789`     | `***-**-6789`       | `***-**-****`      |
-| email          | `alice@gmail.com` | `a***@gmail.com`    | `****@*****.***`   |
-| phone          | `415-555-1234`    | `***-***-1234`      | `***-***-****`     |
-| date_of_birth  | `1985-03-22`      | `1985-**-**`        | `****-**-**`       |
-| account_number | `1234567890123456`| `************3456`  | `****************` |
-| balance        | `45230.00`        | `45230.00`          | `[REDACTED]`       |
-| card_last4     | `4242`            | `4242`              | `****`             |
-| salary         | `120000.00`       | `[REDACTED]`        | `[REDACTED]`       |
-| national_id    | `123-45-6789`     | `***6789`           | `[REDACTED]`       |
-| merchant_raw   | full descriptor   | truncated at 40ch   | `[REDACTED]`       |
+The point of the whole pattern, in one comparison — *identical SQL*, different
+logged-in user:
 
----
+| Column | alice — `db_admin` | bob — `db_analyst` | carol — `db_readonly` |
+|--------|--------------------|--------------------|------------------------|
+| ssn    | `537-47-1781`        | `***-**-1781`      | `***-**-****`          |
+| email  | `alice@gmail.com`    | `a***@gmail.com`   | `****@*****.***`       |
+| salary | `120000.00`          | `[REDACTED]`       | `[REDACTED]`           |
 
-## MCP Tools
-
-| Tool                     | Min Role    | Description                              |
-|--------------------------|-------------|------------------------------------------|
-| `list_tables`            | db_readonly | Tables + sensitivity labels              |
-| `describe_table`         | db_readonly | Schema + per-column masking policy       |
-| `query`                  | db_readonly | Arbitrary SELECT with all guardrails     |
-| `search_customers`       | db_readonly | Search by name/email/KYC status          |
-| `get_transaction_summary`| db_readonly | Recent transactions (masked)             |
-| `get_audit_log`          | db_admin    | Full query audit trail                   |
+And tool-level RBAC: `get_audit_log` returns *"requires db_admin role"* for anyone
+below admin. The authorization is driven by the **OIDC identity**, not by trusting
+the caller.
 
 ---
 
 ## Architecture
 
-Everything below runs from a single `docker compose up`, on one bridge network
-(`mcp-net`):
+Everything below comes up from one `./up.sh`, on a single Docker network:
 
 ```
-        Client (Claude / curl)
-                │  Authorization: Bearer <JWT>
-                ▼
-   Traefik ──────────────┬─────────────────────────────┐
-   (:80)                 │                              │
-   keycloak.test ────────┘            mcp-postgres.traefik.test
-        │                                    │
-        ▼                                    ▼
-   Keycloak                       FastMCP KeycloakAuthProvider
-   (mcp-db realm,                  (OAuth metadata + DCR proxy;
-    auto-imported)  ◄──JWKS/DCR──   validates JWT vs JWKS,
-                                    extracts realm roles)
-                                             │
-                                       FastMCP (streamable-http)
-                                       ┌─────┴────────┐
-                                  Guardrails      Masking Engine
-                                       └─────┬────────┘
-                                        asyncpg pool
-                                             │
-                                       mcp-postgres:5432  (banking_db)
-                                             ▲
-                                        seeder (one-shot)
+        Client (Claude / curl) ── Bearer JWT (per end user) ──▶
+                                            │
+   Traefik ─────────────────────────────────┤
+   keycloak.test ─────────┐                  │
+        │                 │      mcp-postgres.traefik.test
+        ▼                 │                  ▼
+   Keycloak           FastMCP KeycloakAuthProvider
+   (mcp-db realm,     (OAuth metadata + DCR proxy; validates JWT vs JWKS,
+    auto-imported)     extracts realm roles → the principal's authorization)
+                                            │
+                                  ┌─────────┴─────────┐
+                             Guardrails          Masking Engine
+                          (SELECT-only · ACL)   (per-column, by role)
+                                  └─────────┬─────────┘
+                                       Audit log  (who · roles · masked cols)
+                                            │
+                                   Postgres (banking_db)
 ```
 
-- `keycloak.test` is aliased to Traefik **inside** the network too, so the MCP
-  server and the browser use the **same** Keycloak URL — no split-horizon config,
-  and the token issuer matches end to end.
-- `dockerproxy` is a tiny nginx shim that lets Traefik talk to Docker daemons
-  requiring API ≥ 1.40 (e.g. OrbStack). Traefik is constrained to this compose
-  project so it never touches other containers on your host.
+- **No token to paste**; DCR + browser PKCE; cached and refreshed by the client.
+- One Keycloak URL resolves identically from the server and the browser (Traefik
+  network alias), so the token issuer matches end to end.
 
 ---
 
-## Beyond app-layer masking — identity all the way to Postgres
+## Two tiers of "enforce at the source"
 
-This server's authorization is **application-layer**: one pooled `mcp_user`
-connection, masking applied in code by role. The honest weakness is that the
-database authorizes nothing per-user — the masking engine is the whole boundary.
+This repo ships both the pragmatic on-ramp and the compliance-grade destination —
+because the honest answer depends on your Postgres version.
 
-[`experiments/pg18-oauth/`](experiments/pg18-oauth/) is a **proven spike** of the
-stronger architecture using **PostgreSQL 18's native OAuth**: a Keycloak bearer
-authenticates *as the user's role* (`OAUTHBEARER`), Keycloak makes the
-authorization decision (UMA), and **Postgres enforces column access natively** —
-`db_readonly` gets a hard `permission denied` on `ssn` from the engine, no
-`mcp_user`. Includes RFC 8693 token-exchange for the MCP→DB hop. See its
-[README](experiments/pg18-oauth/README.md) and
+### Tier 1 — application-enforced (this server, runs on any Postgres)
+The MCP server validates the user's JWT, derives their role, and applies **masking,
+ACLs, and audit in the app layer**. Identity and authorization are per-user and
+real; the app is the enforcement boundary. This is what `./up.sh` runs and what you
+drive from Claude today.
+
+### Tier 2 — source-enforced (Postgres 18 native OAuth, no service account at all)
+[`experiments/pg18-oauth/`](experiments/pg18-oauth/) is a **proven** spike of the
+end state: the user's Keycloak bearer authenticates to **Postgres itself**
+(`OAUTHBEARER`), Keycloak makes the authorization decision (UMA), and **Postgres
+enforces column access natively** — `db_readonly` gets a hard `permission denied`
+on `ssn` from the engine, not from app code. Includes RFC 8693 token-exchange for
+the agent→DB hop. See its [README](experiments/pg18-oauth/README.md) and
 [TARGET_FLOW](experiments/pg18-oauth/TARGET_FLOW.md).
+
+```
+Tier 1:  user JWT → app derives role → app masks/audits → [pooled DB account] → Postgres
+Tier 2:  user JWT → token-exchange → Postgres authenticates the USER → DB enforces + audits
+```
+
+The gap closing Tier 2 into the production server is purely client-side: a Python
+driver that speaks `OAUTHBEARER` (asyncpg/psycopg3 don't yet) — the exact wire
+format is demonstrated in `experiments/pg18-oauth/pg_oauth_client.py`.
+
+---
+
+## MCP tools
+
+| Tool | Min role | Description |
+|------|----------|-------------|
+| `list_tables` | db_readonly | Tables + sensitivity labels (reports *your* role) |
+| `describe_table` | db_readonly | Schema + per-column masking policy |
+| `query` | db_readonly | Arbitrary `SELECT` with all guardrails |
+| `search_customers` | db_readonly | Search by name / email / KYC status |
+| `get_transaction_summary` | db_readonly | Recent transactions (masked) |
+| `get_audit_log` | db_admin | Full query audit trail |
+
+## Layout
+
+```
+up.sh                     generate creds + render realm + start everything
+docker-compose.yml        Postgres · Keycloak · MCP server · Traefik (self-contained)
+keycloak/realm.template.json   realm template (passwords injected at bring-up)
+mcp_server/               FastMCP server: auth, guardrails, masking, tools
+scripts/                  get_token.sh · smoke_test.py · seed.py
+docs/AUTH_FLOW.md         full OAuth/DCR/PKCE walkthrough
+experiments/pg18-oauth/   Tier 2 — identity native to Postgres 18 (proven)
+```
+
+## Notes
+
+- Demo only — credentials are generated locally and printed once; the database is
+  synthetic (Faker). Not hardened for production deployment.
+- Built with FastMCP, Keycloak 26.6, PostgreSQL, Traefik.
