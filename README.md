@@ -153,6 +153,10 @@ And tool-level RBAC — `get_audit_log` as a non-admin is refused, by role:
 The authorization is driven by the **OIDC identity**, not by trusting the caller —
 same server, same query, different principal, different data.
 
+**Audit at the source:** every PII access is logged against the real user (not a
+service account), with the role used and which columns were masked — see a real
+`get_audit_log` capture in [`docs/examples/audit-log.md`](docs/examples/audit-log.md).
+
 ---
 
 ## Architecture
