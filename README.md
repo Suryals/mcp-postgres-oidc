@@ -279,6 +279,12 @@ experiments/pg18-oauth/   Tier 2 — identity native to Postgres 18 (proven)
   └─ mcp_tier2/PROOF.md      the end-to-end proof
 ```
 
+## Roadmap
+
+Where this is headed — including upstream contributions to close the Python
+`OAUTHBEARER` driver gap (asyncpg, psycopg3 [#1162](https://github.com/psycopg/psycopg/issues/1162))
+and folding Tier 2 into the product: see [`ROADMAP.md`](ROADMAP.md).
+
 ## Notes
 
 - Demo only — credentials are generated locally and printed once; the database is
