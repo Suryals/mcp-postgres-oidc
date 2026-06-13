@@ -217,7 +217,35 @@ which authenticates + authorizes + runs the query **as that user** — `whoami`
 returns `db_admin`/`db_readonly` (not a shared account), and `carol`'s `SELECT ssn`
 is denied by Postgres itself. The only remaining gap to fold this into the main
 server is a mainstream Python driver that speaks `OAUTHBEARER` (asyncpg/psycopg3
-don't yet) — `pgwire.py` is the ~120-line stand-in proving the wire protocol.
+don't yet) — `pgwire.py` is the wire-protocol client that closes that gap.
+
+---
+
+## ⭐ The wire client — how we close the OAUTHBEARER gap
+
+The crux of "no service account" is one file:
+**[`experiments/pg18-oauth/mcp_tier2/pgwire.py`](experiments/pg18-oauth/mcp_tier2/pgwire.py)**.
+
+PostgreSQL 18 authenticates a connection with a bearer token over SASL
+`OAUTHBEARER` — but **asyncpg and psycopg3 don't speak it yet**, and libpq's hook
+isn't surfaced in Python. So a Python service literally *cannot* open a per-user
+connection with today's drivers. `pgwire.py` is the answer: a ~120-line client that
+implements the Postgres v3 wire protocol just far enough to present the token and
+run a `SELECT`. The token-first handshake is the whole trick:
+
+```python
+# StartupMessage → server replies AuthenticationSASL(OAUTHBEARER) → we send the token:
+gs2 = ("n,,\x01auth=Bearer " + token + "\x01\x01").encode()   # RFC 7628 (OAUTHBEARER)
+payload = b"OAUTHBEARER\x00" + struct.pack("!I", len(gs2)) + gs2
+sock.sendall(b"p" + struct.pack("!I", len(payload) + 4) + payload)   # SASLInitialResponse
+# Postgres validates the token via the IdP, then runs the session AS the user's role.
+```
+
+No driver, no service account, no app-side trust — the connection *is* the user.
+It's deliberately tiny because the MCP surface is SELECT-only and guardrailed; it's
+the bridge until the mainstream drivers ship `OAUTHBEARER` (then it's a drop-in
+swap). The full proof it powers is in
+[`mcp_tier2/PROOF.md`](experiments/pg18-oauth/mcp_tier2/PROOF.md).
 
 ---
 
@@ -242,6 +270,9 @@ mcp_server/               FastMCP server: auth, guardrails, masking, tools
 scripts/                  get_token.sh · smoke_test.py · seed.py
 docs/AUTH_FLOW.md         full OAuth/DCR/PKCE walkthrough
 experiments/pg18-oauth/   Tier 2 — identity native to Postgres 18 (proven)
+  └─ mcp_tier2/pgwire.py  ⭐ the OAUTHBEARER wire client (no service account)
+  └─ mcp_tier2/server.py     MCP server that runs each query AS the session user
+  └─ mcp_tier2/PROOF.md      the end-to-end proof
 ```
 
 ## Notes
