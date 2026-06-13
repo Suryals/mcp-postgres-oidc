@@ -210,9 +210,14 @@ Tier 1:  user JWT → app derives role → app masks/audits → [pooled DB accou
 Tier 2:  user JWT → token-exchange → Postgres authenticates the USER → DB enforces + audits
 ```
 
-The gap closing Tier 2 into the production server is purely client-side: a Python
-driver that speaks `OAUTHBEARER` (asyncpg/psycopg3 don't yet) — the exact wire
-format is demonstrated in `experiments/pg18-oauth/pg_oauth_client.py`.
+A **live MCP server with no service account** is proven in
+[`experiments/pg18-oauth/mcp_tier2/`](experiments/pg18-oauth/mcp_tier2/PROOF.md):
+driven over the MCP protocol, it passes the session user's identity to Postgres 18,
+which authenticates + authorizes + runs the query **as that user** — `whoami`
+returns `db_admin`/`db_readonly` (not a shared account), and `carol`'s `SELECT ssn`
+is denied by Postgres itself. The only remaining gap to fold this into the main
+server is a mainstream Python driver that speaks `OAUTHBEARER` (asyncpg/psycopg3
+don't yet) — `pgwire.py` is the ~120-line stand-in proving the wire protocol.
 
 ---
 
