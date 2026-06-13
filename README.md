@@ -123,11 +123,15 @@ watch the data change with whoever you logged in as.
 The point of the whole pattern, in one comparison — *identical SQL*, different
 logged-in user:
 
+_Actual output of `SELECT ssn, email, phone, date_of_birth FROM customers LIMIT 1`,
+run as each user against the running demo:_
+
 | Column | alice — `db_admin` | bob — `db_analyst` | carol — `db_readonly` |
 |--------|--------------------|--------------------|------------------------|
-| ssn    | `537-47-1781`        | `***-**-1781`      | `***-**-****`          |
-| email  | `alice@gmail.com`    | `a***@gmail.com`   | `****@*****.***`       |
-| salary | `120000.00`          | `[REDACTED]`       | `[REDACTED]`           |
+| ssn           | `537-47-1781`            | `***-**-1781`      | `***-**-****`   |
+| email         | `heatherwhite@example.com` | `h***@example.com` | `****@*****.***` |
+| phone         | `952-558-9996`           | `***-***-9996`     | `***-***-****`  |
+| date_of_birth | `1984-03-01`             | `1984-**-**`       | `****-**-**`    |
 
 The *same* "show me 3 customers with name, ssn, email" prompt in Claude Desktop,
 logged in as two different users:
