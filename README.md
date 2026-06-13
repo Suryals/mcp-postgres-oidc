@@ -71,6 +71,12 @@ starts the stack, and prints your demo logins:
     carol  / <generated>   → db_readonly  (PII fully redacted)
 ```
 
+Lost the output? The logins are in the git-ignored `.env`, or reprint them anytime:
+
+```bash
+./scripts/creds.sh
+```
+
 > `*.test` hostnames: OrbStack resolves them automatically. On other setups, add
 > once: `echo "127.0.0.1 keycloak.test mcp-postgres.traefik.test" | sudo tee -a /etc/hosts`
 
